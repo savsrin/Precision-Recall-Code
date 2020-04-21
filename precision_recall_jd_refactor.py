@@ -1,5 +1,24 @@
-import pandas as pd 
-import os 
+#!/usr/bin/env python3
+
+"""
+recount_2v3_jx_comp.py
+Python 3 code for comparing RNA-seq junctions called across mutual samples by
+the recount2 vs. recount3 Sequence Read Archive analysis.
+
+"""
+
+import argparse
+from datetime import datetime
+import logging
+import os
+import pandas as pd
+import os
+
+
+_LOG_MODE = 'INFO'
+_ACCEPTABLE_MOTIFS = ['GTAG', 'GCAG', 'ATAC']
+
+
 #user specified inputs needed for precision & recall calculations (prc)
 sample_ids = ['18538','28168', '45103', '46189', '7613'] 
 #motif to filter junctions by
@@ -50,52 +69,74 @@ def find_coverages(sample_ids,cov_col_name, dataframe):
     #adds scaled coverages to dataframe to a new column for the sample 
     #for sample_id in sample_ids: 
        # dataframe[sample_id] = [cov_value/avg_total_cov for cov_value in samples[sample_id]]
-def main(): 
 
-    #reading ground truth data (srav2 data set) from file into data frame
-    srav2_data = pd.read_csv('srav2.junctions.test_set.tsv',   
-                      sep='\t',
-                      header=None, 
-                      names=dataframe_col_names)
-    #adding coverages for samples to ground truth data frame
-    avg_total_cov_srav2 = find_coverages(sample_ids, 'sampleIDs:coverages', srav2_data)
-    srav2_data.loc[:, sample_num] *=  avg_total_cov_srav2
-     
 
-    #reading test data (srav2 data set) from file into data drame
-    srav3_data = pd.read_csv('srav3.junctions.test_set.tsv',   #reading test data
-                      sep='\t',
-                      header=None, 
-                      names=dataframe_col_names)
+def load_data(jx_file):
+    # reading (sra data set) from file into jx data frame
+    jx_df = pd.read_csv(
+        jx_file, sep='\t', header=None, names=dataframe_col_names
+    )
+    # adding coverages for samples to jx data frame
+    avg_total_cov_srav2 = find_coverages(
+        sample_ids, 'sampleIDs:coverages', jx_df
+    )
+    jx_df.loc[:, sample_num] *= avg_total_cov_srav2
+    jx_df['motif'] = jx_df['5prime_motif']  + jx_df['3prime_motif']
+    return jx_df
 
-    #adding coverages for samples to test data frame
-    avg_total_cov_srav3 = find_coverages(sample_ids, 'sampleIDs:coverages', srav3_data) 
-    srav3_data.loc[:,sample_num] *=  avg_total_cov_srav3
 
-    #adding column with the full motif for each junction to dataframes
-    srav2_data['motif'] = srav2_data['5prime_motif']  + srav2_data['3prime_motif'] 
-    srav3_data['motif'] = srav3_data['5prime_motif']  + srav3_data['3prime_motif']
-    
+def main():
+    parser = argparse.ArgumentParser(
+        description='Parses recount2 and recount3 junction files and compares'
+                    'junctions between samples in both cohorts.'
+    )
+    parser.add_argument(
+        '--output-path', '-o', default='./',
+        help='Give the path to store junction comparison output and plots.'
+    )
+    parser.add_argument(
+        '--v2-jxs', '-j',
+        help='Provide the file containing recount2 junctions.'
+    )
+    parser.add_argument(
+        '--v3-jxs', '-j',
+        help='Provide the file containing recount3 junctions.'
+    )
+
+    args = parser.parse_args()
+    out_path = args.output_path
+    recount2 = args.v2_jxs
+    recount3 = args.v3_jxs
+
+    now = datetime.now().strftime('%m-%d-%Y_%H.%M.%S')
+    log_file = os.path.join(
+        out_path, 'recount_2v3_jx_comparison_log_{}.txt'.format(now)
+    )
+    logging.basicConfig(filename=log_file, level=_LOG_MODE)
+
+    srav2_data = load_data(recount2)
+    srav3_data = load_data(recount3)
+
    # print ("before filtering\n")
    # print(srav2_data.shape[0])
-   # print(srav3_data.shape[0]) 
-   
-    
-    
-    coverage_thresholds = [(0,0), (5,5), 
-                           (10,10)]
-    print(coverage_thresholds)
-    for cov_thresh in coverage_thresholds: 
+   # print(srav3_data.shape[0])
 
-        #creating new data frames for ground truth & test that are filtered by user
-        #specified thresholds for the motif and scaled coverage values 
-        srav2_data_filtered = srav2_data[(srav2_data['motif'] == filter_motif) 
-                                        & (srav2_data[sample_num] != 0)
-                                        & (srav2_data[sample_num] >= cov_thresh[0])]
+    coverage_thresholds = [(0,0), (5,5), (10,10)]
+    logging.info(coverage_thresholds)
+    for cov_thresh in coverage_thresholds:
+        # creating new data frames for ground truth & test that are filtered by
+        # user-specified thresholds for the motif and scaled coverage values
+        srav2_data_filtered = srav2_data[
+            (srav2_data['motif'] == filter_motif)
+            & (srav2_data[sample_num] != 0)
+            & (srav2_data[sample_num] >= cov_thresh[0])
+        ]
        
-        srav3_data_filtered = srav3_data[(srav3_data['motif'] == filter_motif) 
-                                         & (srav3_data[sample_num] != 0)
-                                         & (srav3_data[sample_num] >= cov_thresh[1])]
+        srav3_data_filtered = srav3_data[
+            (srav3_data['motif'] == filter_motif)
+            & (srav3_data[sample_num] != 0)
+            & (srav3_data[sample_num] >= cov_thresh[1])
+        ]
 
         #calculating precision and recall 
 
@@ -123,6 +164,7 @@ def main():
     print(srav2_data_filtered[col_names_for_prc])
     print("srav3 filtered data")
     print(srav3_data_filtered[col_names_for_prc])
+
 
 if __name__ == '__main__':
     main()
