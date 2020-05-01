@@ -34,6 +34,9 @@ _MU_JX = 'mutual'
 _TOT_COV2 = 'total_v2_coverage'
 _TOT_COV3 = 'total_v3_coverage'
 _COMPLEMENT = str.maketrans("ATCG", "TAGC")
+_SRA = 'SRA'
+_TCGA = 'TCGA'
+_GTEX = 'GTEx'
 
 
 class JXIndexError(Exception):
@@ -137,6 +140,55 @@ def grouped_boxplots(data_dict, plot_dict, fig_file, fig_size=(3.0, 5.0),
     return
 
 
+
+# dict format:
+samp_dict = {
+    'sample_id1': {
+        'tot_cov': 123,
+        'v2_jxs': {
+            'GTAG': ['cov1', 'cov2', 'cov3', 'cov4'],
+            'GCAG': [],
+            'ATAC': [],
+            'other': []
+        },
+        'v3_jxs': {
+            'GTAG': ['cov1', 'cov2', 'cov3', 'cov4'],
+            'GCAG': [],
+            'ATAC': [],
+            'other': []
+        },
+        'mutual': {
+            'GTAG': ['cov1', 'cov2', 'cov3', 'cov4'],
+            'GCAG': [],
+            'ATAC': [],
+            'other': []
+        }
+    },
+    'sample_id2': {
+        'tot_cov': 123,
+        'v2_jxs': {
+            'GTAG': ['cov1', 'cov2', 'cov3', 'cov4'],
+            'GCAG': [],
+            'ATAC': [],
+            'other': []
+        },
+        'v3_jxs': {
+            'GTAG': ['cov1', 'cov2', 'cov3', 'cov4'],
+            'GCAG': [],
+            'ATAC': [],
+            'other': []
+        },
+        'mutual': {
+            'GTAG': ['cov1', 'cov2', 'cov3', 'cov4'],
+            'GCAG': [],
+            'ATAC': [],
+            'other': []
+        }
+    }
+}
+
+# TODO: change filtering to remove coverage levels
+# TODO: change boxplots to remove coverages (all motifs per plot?)
 def filter_and_compare_jxs(sample_jx_dict, outpath, now, cohort=''):
     plot_info_dict = {
         'light colors': ['#ED5C4D', '#57B5ED'],
@@ -322,17 +374,17 @@ def recount_firstpass(jx_file, recount_2to3_map=None):
     return sample_cov_dict
 
 
-def coordinates_from_recount_line(recount_line):
+def coordinates_from_jx_line(jx_line, coord_positions):
     """
 
-    :param recount_line:
+    :param jx_line:
     :return:
     """
-    chrom = recount_line[1]
+    chrom = jx_line[coord_positions[0]]
     chrom_int = int(chrom.strip('chr'))
-    left = int(recount_line[2])
-    right = int(recount_line[3])
-    strand = recount_line[5]
+    left = int(jx_line[coord_positions[1]])
+    right = int(jx_line[coord_positions[2]])
+    strand = jx_line[coord_positions[3]]
     return (chrom_int, left, right, strand)
 
 
@@ -351,7 +403,12 @@ def add_mutual_jx_to_samp_dict(samp_dict, line2, line3, mutual_samples,
     motif = line2[4] + line2[5]
     v2_samps = line2[6].split(',')
     v2_covs = line2[7].split(',')
-    samp_cov_3_list = line3[11].split(',')
+    if type(line3) == str:
+        samp_cov_3_list = line3[11].split(',')
+    else:
+        samp_cov_3_list = []
+        for line in line3:
+            samp_cov_3_list.extend(line[11].split(','))
 
     # process v2 samples and coverage
     for samp, cov in zip(v2_samps, v2_covs):
@@ -429,7 +486,7 @@ def add_v3_jx_to_samp_dict(samp_dict, jx_line, strand, mutual_samps):
 
 
 def collect_jx_covs(v2_jxs, v3_jxs, v2_id_cov, v3_id_cov, mutual_samples,
-                    recount2_id_map):
+                    recount2_id_map, cohort_flag):
     """
 
     :param v2_jxs:
@@ -440,6 +497,11 @@ def collect_jx_covs(v2_jxs, v3_jxs, v2_id_cov, v3_id_cov, mutual_samples,
     :param recount2_id_map:
     :return:
     """
+    if cohort_flag == _SRA:
+        coord_locs = (0, 1, 2, 3)
+    else:
+        coord_locs = (1, 2, 3, 5)
+
     samp_dict = {}
     for samp in mutual_samples:
         samp_dict[samp] = {
@@ -453,18 +515,17 @@ def collect_jx_covs(v2_jxs, v3_jxs, v2_id_cov, v3_id_cov, mutual_samples,
     with gzip.open(v2_jxs, 'rt') as file2, gzip.open(v3_jxs, 'rt') as file3:
         v2_line = next(file2)
         v3_line = next(file3)
-        v2_tup = coordinates_from_recount_line(v2_line)
-        v3_tup = coordinates_from_recount_line(v3_line)
-        # TODO: add coordinates from recount2
+        v2_coords = coordinates_from_jx_line(v2_line, coord_locs)
+        v3_coords = coordinates_from_jx_line(v3_line, coord_locs)
         while v2_line or v3_line:
             # Finish off v3 or v2 file after the other ends:
             if not v2_line:
-                st3 = v3_tup[3]
+                st3 = v3_coords[3]
                 samp_dict = add_v3_jx_to_samp_dict(
                     samp_dict, v3_line, st3, mutual_samples
                 )
                 v3_line = next(file3)
-                v3_tup = coordinates_from_recount_line(v3_line)
+                v3_coords = coordinates_from_jx_line(v3_line, coord_locs)
                 continue
 
             if not v3_line:
@@ -472,42 +533,57 @@ def collect_jx_covs(v2_jxs, v3_jxs, v2_id_cov, v3_id_cov, mutual_samples,
                     samp_dict, v2_line, mutual_samples, recount2_id_map
                 )
                 v2_line = next(file2)
-                v2_tup = coordinates_from_recount_line(v2_line)
+                v2_coords = coordinates_from_jx_line(v2_line, coord_locs)
                 continue
 
             # Main comparison: running through lines in both files
-            if v2_tup < v3_tup:
+            if v2_coords < v3_coords:
                 samp_dict = add_v2_jx_to_samp_dict(
                     samp_dict, v2_line, mutual_samples, recount2_id_map
                 )
                 v2_line = next(file2)
-                v2_tup = coordinates_from_recount_line(v2_line)
+                v2_coords = coordinates_from_jx_line(v2_line, coord_locs)
                 continue
-            elif v2_tup > v3_tup:
-                st3 = v3_tup[3]
+            elif v2_coords > v3_coords:
+                st3 = v3_coords[3]
                 samp_dict = add_v3_jx_to_samp_dict(
                     samp_dict, v3_line, st3, mutual_samples
                 )
                 v3_line = next(file3)
-                v3_tup = coordinates_from_recount_line(v3_line)
+                v3_coords = coordinates_from_jx_line(v3_line, coord_locs)
             else:
                 # add jx to mutual
-                # TODO: check for next-line matching jxs
                 # TODO: improve addition of jxs to dictionary
-                # TODO: add "junction
+                # TODO: add "junction detection event" collection
+
+                v3_init_coords = v3_coords
+                v3_init_line = v3_line
+                v3_line_list = []
+                while v3_coords == v3_init_coords:
+                    v3_line_list.append(v3_line)
+                    v3_line = next(file3)
+                    v3_coords = coordinates_from_jx_line(v3_line, coord_locs)
+
+                if len(v3_line_list) == 1:
+                    samp_dict = add_mutual_jx_to_samp_dict(
+                        samp_dict, v2_line, v3_init_line, mutual_samples,
+                        recount2_id_map
+                    )
+                else:
+                    samp_dict = add_mutual_jx_to_samp_dict(
+                        samp_dict, v2_line, v3_line_list, mutual_samples,
+                        recount2_id_map
+                    )
+
                 v2_line = next(file2)
-                v2_tup = coordinates_from_recount_line(v2_line)
-                v3_line = next(file3)
-                v3_tup = coordinates_from_recount_line(v3_line)
+                v2_coords = coordinates_from_jx_line(v2_line, coord_locs)
                 continue
 
     return samp_dict
 
 
 def execute_jx_comp(v2_file, v3_file, recount2_id_map, out_path, now, flag):
-
-
-    if flag == 'SRA':
+    if flag == _SRA:
         v2_id_cov = intropolis_firstpass(v2_file, recount2_id_map)
 
     else:
@@ -534,7 +610,8 @@ def execute_jx_comp(v2_file, v3_file, recount2_id_map, out_path, now, flag):
         ''.format(flag, v2_avg_cov, v3_avg_cov)
     )
     sample_jx_dict = collect_jx_covs(
-        v2_file, v3_file, v2_id_cov, v3_id_cov, mutual_samples, recount2_id_map
+        v2_file, v3_file, v2_id_cov, v3_id_cov, mutual_samples,
+        recount2_id_map, flag
     )
     data_file = os.path.join(
         out_path, '{}_sample_jx_dict_{}.json'.format(flag, now)
@@ -542,7 +619,7 @@ def execute_jx_comp(v2_file, v3_file, recount2_id_map, out_path, now, flag):
     with open(data_file, 'w') as output:
         json.dump(sample_jx_dict, output)
 
-    filter_and_compare_jxs(sample_jx_dict, out_path, now, cohort='SRA')
+    filter_and_compare_jxs(sample_jx_dict, out_path, now, cohort=_SRA)
     return
 
 
@@ -621,6 +698,6 @@ if __name__ == '__main__':
     recount2_id_map = map_recount_ids_2to3(ids_v2, recount3_id_map)
 
     # compare v2 to v3 jxs for three cohorts
-    execute_jx_comp(gtex_v2, gtex_v3, recount2_id_map, out_path, now, 'GTEx')
-    execute_jx_comp(tcga_v2, tcga_v3, recount2_id_map, out_path, now, 'TCGA')
-    execute_jx_comp(sra_v2, sra_v3, recount2_id_map, out_path, now, 'SRA')
+    execute_jx_comp(gtex_v2, gtex_v3, recount2_id_map, out_path, now, _GTEX)
+    execute_jx_comp(tcga_v2, tcga_v3, recount2_id_map, out_path, now, _TCGA)
+    execute_jx_comp(sra_v2, sra_v3, recount2_id_map, out_path, now, _SRA)
