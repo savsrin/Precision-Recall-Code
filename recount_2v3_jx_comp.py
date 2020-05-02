@@ -206,7 +206,7 @@ def prepare_boxplot_data(sample_jx_dict, outpath, now, cohort):
 def map_recount_ids_2to3(recount2_sample_ids, recount3_id_map):
     sample_ids = pd.read_table(
         recount2_sample_ids, header=None, usecols=[0, 2],
-        names=['recount_id', 'universal_id']
+        names=['recount_id', 'universal_id'], dtype={'recount_id': str}
     )
     sample_ids['recount3'] = sample_ids.universal_id.apply(
         lambda x: recount3_id_map.get(x, 0)
@@ -218,7 +218,7 @@ def accession_to_recount3_ids(gtex_ids, tcga_ids, sra_ids):
     uppercase = {'gdc_file_id': lambda ident: ident.upper()}
     tcga_df = pd.read_table(
         tcga_ids, sep='\t', usecols=['rail_id', 'gdc_file_id'],
-        converters=uppercase, dtype=str
+        converters=uppercase, dtype={'rail_id': str}
     )
     tcga_df.rename(columns={'gdc_file_id': 'project_id'}, inplace=True)
     gtex_df = pd.read_table(
@@ -251,7 +251,6 @@ def intropolis_firstpass(jx_file, recount_2to3_map):
 def recount_firstpass(jx_file, recount_2to3_map=None):
     sample_set = set()
     with gzip.open(jx_file, 'rt') as cov_file:
-        print('starting tcga junctions')
         jx_cov = csv.reader(cov_file, delimiter='\t')
         for line in jx_cov:
             samp_cov_info = line[11].split(',')
@@ -259,7 +258,7 @@ def recount_firstpass(jx_file, recount_2to3_map=None):
             for entry in samp_cov_info:
                 samp, cov = entry.split(':')
                 if recount_2to3_map:
-                    samp = recount_2to3_map[samp]
+                    samp = recount_2to3_map.get(samp, None)
                 if not samp:
                     continue
                 sample_set.add(samp)
@@ -421,7 +420,9 @@ def collect_jx_covs(v2_jxs, v3_jxs, mutual_samples, recount2_id_map,
             }
         }
 
-    with gzip.open(v2_jxs, 'rt') as file2, gzip.open(v3_jxs, 'rt') as file3:
+    with gzip.open(v2_jxs, 'rt') as v2file, gzip.open(v3_jxs, 'rt') as v3file:
+        file2 = csv.reader(v2file, delimiter='\t')
+        file3 = csv.reader(v3file, delimiter='\t')
         v2_line = next(file2)
         v3_line = next(file3)
         v2_coords = coordinates_from_jx_line(v2_line, coord_locs)
@@ -489,20 +490,35 @@ def collect_jx_covs(v2_jxs, v3_jxs, mutual_samples, recount2_id_map,
     return samp_dict
 
 
-def execute_jx_comp(v2_file, v3_file, recount2_id_map, out_path, now, flag):
-    if flag == _SRA:
-        v2_ids = intropolis_firstpass(v2_file, recount2_id_map)
+def execute_jx_comp(v2_file, v3_file, recount2_id_map, out_path, now, flag,
+                    mutual_sample_file=None):
+    if not mutual_sample_file:
+        if flag == _SRA:
+            v2_ids = intropolis_firstpass(v2_file, recount2_id_map)
 
+        else:
+            v2_ids = recount_firstpass(v2_file, recount2_id_map)
+
+        v3_ids = recount_firstpass(v3_file)
+        mutual_samples = v2_ids.intersection(v3_ids)
+
+        logging.info(
+            '{}: v2 samples: {}, v3 samples: {}'
+            ''.format(flag, len(v2_ids), len(v3_ids))
+        )
+        sample_file = os.path.join(
+            out_path, '{}_mutual_samples_{}.json'.format(flag, now)
+        )
+        with open(sample_file, 'w') as output:
+            json.dump([mutual_samples], output)
     else:
-        v2_ids = recount_firstpass(v2_file, recount2_id_map)
-
-    v3_ids = recount_firstpass(v3_file)
-    mutual_samples = v2_ids.intersection(v3_ids)
+        with open(mutual_sample_file) as recover:
+            mutual_samples = json.load(recover)
+            mutual_samples = mutual_samples[0]
 
     logging.info(
-        '{}: v2 samples: {}, v3 samples: {}, mutual samples: {}'
-        ''.format(flag, len(v2_ids), len(v3_ids), len(mutual_samples))
-    )
+        '{}: {} mutual samples'.format(flag, len(mutual_samples))
+    )    
     sample_jx_dict = collect_jx_covs(
         v2_file, v3_file, mutual_samples, recount2_id_map, flag
     )
@@ -566,6 +582,10 @@ if __name__ == '__main__':
         '--sra-phenotypes-v3', '-R',
         help='Provide the phenotype file for SRA recount3 samples.'
     )
+    parser.add_argument(
+        '--gtex-mutual-samples',
+        help='Provide a json file of GTEx samples in recount2 and recount3.'
+    )
 
     args = parser.parse_args()
     out_path = args.output_path
@@ -577,8 +597,9 @@ if __name__ == '__main__':
     gtex_v3 = args.gtex_v3_jxs
     ids_v2 = args.recount2_sample_ids
     gtex_ids3 = args.gtex_phenotypes_v3
-    tcga_ids3 = args.tcga_phenotyes_v3
+    tcga_ids3 = args.tcga_phenotypes_v3
     sra_ids3 = args.sra_phenotypes_v3
+    gtex_both = args.gtex_mutual_samples
 
     now = datetime.now().strftime('%m-%d-%Y_%H.%M.%S')
     log_file = os.path.join(
@@ -589,8 +610,11 @@ if __name__ == '__main__':
     # map recount2 sample IDs to recount3 sample IDs
     recount3_id_map = accession_to_recount3_ids(gtex_ids3, tcga_ids3, sra_ids3)
     recount2_id_map = map_recount_ids_2to3(ids_v2, recount3_id_map)
-
+    
     # compare v2 to v3 jxs for three cohorts
-    execute_jx_comp(gtex_v2, gtex_v3, recount2_id_map, out_path, now, _GTEX)
+    execute_jx_comp(
+        gtex_v2, gtex_v3, recount2_id_map, out_path, now, _GTEX, gtex_both
+    )    
     execute_jx_comp(tcga_v2, tcga_v3, recount2_id_map, out_path, now, _TCGA)
     execute_jx_comp(sra_v2, sra_v3, recount2_id_map, out_path, now, _SRA)
+
