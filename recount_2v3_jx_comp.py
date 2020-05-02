@@ -13,6 +13,7 @@ from datetime import datetime
 import gzip
 import json
 import logging
+import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import os
@@ -25,28 +26,25 @@ sns.set(color_codes=True)
 
 _LOG_MODE = 'INFO'
 _CANON_MOTIFS = ['GTAG', 'GCAG', 'ATAC']
-_MIN_COVS = [0, 5, 10]
-_MULTIPLIER = 100000000
 _OTHER_MOT = 'other'
-_V2_JX = 'v2_jxs'
-_V3_JX = 'v3_jxs'
+_V2_JX = 'v2_only'
+_V3_JX = 'v3_only'
 _MU_JX = 'mutual'
-_TOT_COV2 = 'total_v2_coverage'
-_TOT_COV3 = 'total_v3_coverage'
 _COMPLEMENT = str.maketrans("ATCG", "TAGC")
 _SRA = 'SRA'
 _TCGA = 'TCGA'
 _GTEX = 'GTEx'
+_JXS = 'jxs'
+_EVENTS = 'events'
 
 
 class JXIndexError(Exception):
     pass
 
 
-def grouped_boxplots(data_dict, plot_dict, fig_file, fig_size=(3.0, 5.0),
-                     logscale=False, y_label='precision and recall',
-                     percent=True, right_lim_shift=2,
-                     x_label='minimum scaled coverage threshold'):
+def grouped_boxplots(data_dict, plot_dict, fig_file, fig_size=(7.0, 4.0),
+                     logscale=False, y_label= 'recall', percent=True,
+                     right_lim_shift=2, x_label='splice site motif'):
     """
 
     :param data_dict:
@@ -124,6 +122,13 @@ def grouped_boxplots(data_dict, plot_dict, fig_file, fig_size=(3.0, 5.0),
     plt.setp(
         ax.yaxis.get_majorticklabels(), fontsize=7, color='black'
     )
+
+    legend_list = []
+    for p_col, p_lab in zip(plot_dict['dark colors'], plot_dict['row labels']):
+        legend_list.append(mpatches.Patch(color=p_col, label=p_lab))
+
+    plt.legend(handles=legend_list)
+
     if percent:
         ax.yaxis.set_major_formatter(
             ticker.FuncFormatter(
@@ -140,152 +145,47 @@ def grouped_boxplots(data_dict, plot_dict, fig_file, fig_size=(3.0, 5.0),
     return
 
 
-
-# dict format:
-samp_dict = {
-    'sample_id1': {
-        'tot_cov': 123,
-        'v2_jxs': {
-            'GTAG': ['cov1', 'cov2', 'cov3', 'cov4'],
-            'GCAG': [],
-            'ATAC': [],
-            'other': []
-        },
-        'v3_jxs': {
-            'GTAG': ['cov1', 'cov2', 'cov3', 'cov4'],
-            'GCAG': [],
-            'ATAC': [],
-            'other': []
-        },
-        'mutual': {
-            'GTAG': ['cov1', 'cov2', 'cov3', 'cov4'],
-            'GCAG': [],
-            'ATAC': [],
-            'other': []
-        }
-    },
-    'sample_id2': {
-        'tot_cov': 123,
-        'v2_jxs': {
-            'GTAG': ['cov1', 'cov2', 'cov3', 'cov4'],
-            'GCAG': [],
-            'ATAC': [],
-            'other': []
-        },
-        'v3_jxs': {
-            'GTAG': ['cov1', 'cov2', 'cov3', 'cov4'],
-            'GCAG': [],
-            'ATAC': [],
-            'other': []
-        },
-        'mutual': {
-            'GTAG': ['cov1', 'cov2', 'cov3', 'cov4'],
-            'GCAG': [],
-            'ATAC': [],
-            'other': []
-        }
-    }
-}
-
-# TODO: change filtering to remove coverage levels
-# TODO: change boxplots to remove coverages (all motifs per plot?)
-def filter_and_compare_jxs(sample_jx_dict, outpath, now, cohort=''):
+def prepare_boxplot_data(sample_jx_dict, outpath, now, cohort):
     plot_info_dict = {
-        'light colors': ['#ED5C4D', '#57B5ED'],
-        'dark colors': ['#ED5C4D', '#57B5ED']
+        'light colors': ['#29A1E8', '#85C9F2', '#E8321F', '#F2867B'],
+        'dark colors':  ['#29A1E8', '#85C9F2', '#E8321F', '#F2867B'],
+        'row labels': [
+            'v3 junction recall: v2 ground truth',
+            'v3 detection event recall; v2 ground truth',
+            'v2 junction recall; v3 ground truth',
+            'v2 detection event recall; v2 ground truth'
+        ]
     }
+
     # Begin processing of all jxs/all motifs
-    all_motif_data_dict = {cov: {'data': [[], []]} for cov in _MIN_COVS}
-    for sample, data in sample_jx_dict:
-        v2_tot = data[_TOT_COV2]
-        v3_tot = data[_TOT_COV3]
-        v2_covs = [
-            _MULTIPLIER * cov / v2_tot for cov in data[_V2_JX][_OTHER_MOT]
-        ]
-        v3_covs = [
-            _MULTIPLIER * cov / v3_tot for cov in data[_V3_JX][_OTHER_MOT]
-        ]
-        v2_mutual_scaled = [
-            _MULTIPLIER * cov / v2_tot for cov in data[_MU_JX][_OTHER_MOT][0]
-        ]
-        v3_mutual_scaled = [
-            _MULTIPLIER * cov / v3_tot for cov in data[_MU_JX][_OTHER_MOT][1]
-        ]
-
-        for threshold in _MIN_COVS:
-            v2_count = len(list(filter(lambda x: x >= threshold, v2_covs)))
-            v3_count = len(list(filter(lambda x: x >= threshold, v3_covs)))
-            mutual_count = 0
-            for v2_val, v3_val in zip(v2_mutual_scaled, v3_mutual_scaled):
-                if v2_val >= threshold:
-                    if v3_val >= threshold:
-                        mutual_count += 1
-                    else:
-                        v2_count += 1
-                else:
-                    if v3_val >= threshold:
-                        v3_count += 1
-
-            precision = mutual_count / (mutual_count + v3_count)
-            recall = mutual_count / (mutual_count + v2_count)
-            all_motif_data_dict[threshold]['data'][0].append(precision)
-            all_motif_data_dict[threshold]['data'][1].append(recall)
+    plot_data_dict = {mot: {'data': [[], [], [], []]} for mot in _CANON_MOTIFS}
+    plot_data_dict['all motifs'] = {'data': [[], [], [], []]}
 
     # Process each canonical motif
-    for motif in _CANON_MOTIFS:
-        grouped_data_dict = {cov: {'data': [[], []]} for cov in _MIN_COVS}
-        for sample, data in sample_jx_dict:
-            v2_tot = data[_TOT_COV2]
-            v3_tot = data[_TOT_COV3]
-            v2_covs = [
-                _MULTIPLIER * cov / v2_tot for cov in data[_V2_JX][motif]
-            ]
-            v3_covs = [
-                _MULTIPLIER * cov / v3_tot for cov in data[_V3_JX][motif]
-            ]
-            v2_mutual_scaled = [
-                _MULTIPLIER * cov / v2_tot for cov in data[_MU_JX][motif][0]
-            ]
-            v3_mutual_scaled = [
-                _MULTIPLIER * cov / v3_tot for cov in data[_MU_JX][motif][1]
-            ]
+    for motif in _CANON_MOTIFS + [_OTHER_MOT]:
+        for sample, data in sample_jx_dict.items():
+            v2_jxs = data[_JXS][_V2_JX][motif]
+            v3_jxs = data[_JXS][_V3_JX][motif]
+            mutual_jxs = data[_JXS][_MU_JX][motif]
+            v2_events = data[_EVENTS][_V2_JX][motif]
+            v3_events = data[_EVENTS][_V3_JX][motif]
+            mutual_events = data[_EVENTS][_MU_JX][motif]
 
-            for threshold in _MIN_COVS:
-                v2_count = len(list(filter(lambda x: x >= threshold, v2_covs)))
-                v3_count = len(list(filter(lambda x: x >= threshold, v3_covs)))
-                mutual_count = 0
-                for v2_val, v3_val in zip(v2_mutual_scaled, v3_mutual_scaled):
-                    if v2_val >= threshold:
-                        if v3_val >= threshold:
-                            mutual_count += 1
-                        else:
-                            v2_count += 1
-                    else:
-                        if v3_val >= threshold:
-                            v3_count += 1
+            jx_recall3 = mutual_jxs / (mutual_jxs + v3_jxs)
+            jx_recall2 = mutual_jxs / (mutual_jxs + v2_jxs)
+            event_recall3 = mutual_events / (mutual_events + v3_events)
+            event_recall2 = mutual_events / (mutual_events + v2_events)
 
-                precision = mutual_count / (mutual_count + v3_count)
-                recall = mutual_count / (mutual_count + v2_count)
-                grouped_data_dict[threshold]['data'][0].append(precision)
-                grouped_data_dict[threshold]['data'][1].append(recall)
-                all_motif_data_dict[threshold]['data'][0].append(precision)
-                all_motif_data_dict[threshold]['data'][1].append(recall)
+            plot_data_dict['all motifs']['data'][0].append(jx_recall2)
+            plot_data_dict['all motifs']['data'][1].append(event_recall2)
+            plot_data_dict['all motifs']['data'][2].append(jx_recall3)
+            plot_data_dict['all motifs']['data'][3].append(event_recall3)
 
-        fig_file = os.path.join(
-            outpath, '{}_{}_{}.pdf'.format(cohort, motif, now)
-        )
-        data_file = os.path.join(
-            outpath, '{}_{}_plotinfo_{}.json'.format(cohort, motif, now)
-        )
-        with open(data_file, 'w') as output:
-            dump_list = [
-                grouped_data_dict, plot_info_dict, fig_file
-            ]
-            json.dump(dump_list, output)
-
-        grouped_boxplots(
-            grouped_data_dict, plot_info_dict, fig_file, fig_size=(5.0, 5.0)
-        )
+            if motif != _OTHER_MOT:
+                plot_data_dict[motif]['data'][0].append(jx_recall2)
+                plot_data_dict[motif]['data'][1].append(event_recall2)
+                plot_data_dict[motif]['data'][2].append(jx_recall3)
+                plot_data_dict[motif]['data'][3].append(event_recall3)
 
     fig_file = os.path.join(outpath, '{}_allmotifs_{}.pdf'.format(cohort, now))
     data_file = os.path.join(
@@ -293,12 +193,12 @@ def filter_and_compare_jxs(sample_jx_dict, outpath, now, cohort=''):
     )
     with open(data_file, 'w') as output:
         dump_list = [
-            all_motif_data_dict, plot_info_dict, fig_file
+            plot_data_dict, plot_info_dict, fig_file
         ]
         json.dump(dump_list, output)
 
     grouped_boxplots(
-        all_motif_data_dict, plot_info_dict, fig_file, fig_size=(5.0, 5.0)
+        plot_data_dict, plot_info_dict, fig_file
     )
     return
 
@@ -334,26 +234,22 @@ def accession_to_recount3_ids(gtex_ids, tcga_ids, sra_ids):
 
 
 def intropolis_firstpass(jx_file, recount_2to3_map):
-    sample_cov_dict = {}
+    sample_set = set()
     with gzip.open(jx_file, 'rt') as cov_file:
         jx_cov = csv.reader(cov_file, delimiter='\t')
         for line in jx_cov:
             ids = line[6].split(',')
-            covs = line[7].split(',')
-            for samp, cov in zip(ids, covs):
+            for samp in ids:
                 samp = recount_2to3_map[samp]
                 if not samp:
                     continue
-                try:
-                    sample_cov_dict[samp] += cov
-                except KeyError:
-                    sample_cov_dict[samp] = cov
+                sample_set.add(samp)
 
-    return sample_cov_dict
+    return sample_set
 
 
 def recount_firstpass(jx_file, recount_2to3_map=None):
-    sample_cov_dict = {}
+    sample_set = set()
     with gzip.open(jx_file, 'rt') as cov_file:
         print('starting tcga junctions')
         jx_cov = csv.reader(cov_file, delimiter='\t')
@@ -366,12 +262,9 @@ def recount_firstpass(jx_file, recount_2to3_map=None):
                     samp = recount_2to3_map[samp]
                 if not samp:
                     continue
-                try:
-                    sample_cov_dict[samp] += cov
-                except KeyError:
-                    sample_cov_dict[samp] = cov
+                sample_set.add(samp)
 
-    return sample_cov_dict
+    return sample_set
 
 
 def coordinates_from_jx_line(jx_line, coord_positions):
@@ -416,9 +309,10 @@ def add_mutual_jx_to_samp_dict(samp_dict, line2, line3, mutual_samples,
         if samp not in mutual_samples:
             continue
         if samp in samp_cov_3_list:
-            joint_samps[samp] = {'v2': cov}
+            joint_samps[samp] = {'v2': int(cov)}
         else:
-            samp_dict[samp][_V2_JX][motif].append(cov)
+            samp_dict[samp][_JXS][_V2_JX][motif] += 1
+            samp_dict[samp][_EVENTS][_V2_JX][motif] += int(cov)
 
     # process v3 samples and coverage
     for samp_info in samp_cov_3_list:
@@ -426,14 +320,24 @@ def add_mutual_jx_to_samp_dict(samp_dict, line2, line3, mutual_samples,
         if samp not in mutual_samples:
             continue
         if samp in joint_samps.keys():
-            joint_samps[samp]['v3'] = cov
+            joint_samps[samp]['v3'] = int(cov)
         else:
-            samp_dict[samp][_V3_JX][motif].append(cov)
+            samp_dict[samp][_JXS][_V3_JX][motif] += 1
+            samp_dict[samp][_EVENTS][_V3_JX][motif] += int(cov)
 
     # process coverage in mutual samples/jxs
     for samp, values in joint_samps.items():
-        samp_dict[samp][_MU_JX][motif][0].append(values['v2'])
-        samp_dict[samp][_MU_JX][motif][1].append(values['v3'])
+        v2_count = values['v2']
+        v3_count = values['v3']
+        if v2_count < v3_count:
+            mutual_events = v2_count
+            samp_dict[samp][_EVENTS][_V3_JX][motif] += v3_count - v2_count
+        else:
+            mutual_events = v3_count
+            samp_dict[samp][_EVENTS][_V2_JX][motif] += v2_count - v3_count
+
+        samp_dict[samp][_JXS][_MU_JX][motif] += 1
+        samp_dict[samp][_EVENTS][_MU_JX][motif] += mutual_events
 
     return samp_dict
 
@@ -456,8 +360,8 @@ def add_v2_jx_to_samp_dict(samp_dict, jx_line, mutual_samples, recount2_ids):
             continue
         if motif not in _CANON_MOTIFS:
             motif = _OTHER_MOT
-        samp_dict[samp][_V2_JX][motif].append(cov)
-
+        samp_dict[samp][_JXS][_V2_JX][motif] += 1
+        samp_dict[samp][_EVENTS][_V2_JX][motif] += int(cov)
     return samp_dict
 
 
@@ -480,13 +384,13 @@ def add_v3_jx_to_samp_dict(samp_dict, jx_line, strand, mutual_samps):
             continue
         if motif not in _CANON_MOTIFS:
             motif = _OTHER_MOT
-        samp_dict[samp][_V3_JX][motif].append(cov)
-
+        samp_dict[samp][_JXS][_V3_JX][motif] += 1
+        samp_dict[samp][_EVENTS][_V3_JX][motif] += int(cov)
     return samp_dict
 
 
-def collect_jx_covs(v2_jxs, v3_jxs, v2_id_cov, v3_id_cov, mutual_samples,
-                    recount2_id_map, cohort_flag):
+def collect_jx_covs(v2_jxs, v3_jxs, mutual_samples, recount2_id_map,
+                    cohort_flag):
     """
 
     :param v2_jxs:
@@ -505,11 +409,16 @@ def collect_jx_covs(v2_jxs, v3_jxs, v2_id_cov, v3_id_cov, mutual_samples,
     samp_dict = {}
     for samp in mutual_samples:
         samp_dict[samp] = {
-            _TOT_COV2: v2_id_cov[samp],
-            _TOT_COV3: v3_id_cov[samp],
-            _V2_JX: {mot: [] for mot in _CANON_MOTIFS + [_OTHER_MOT]},
-            _V3_JX: {mot: [] for mot in _CANON_MOTIFS + [_OTHER_MOT]},
-            _MU_JX: {mot: [[], []] for mot in _CANON_MOTIFS + [_OTHER_MOT]}
+            _JXS: {
+                _V2_JX: {mot: 0 for mot in _CANON_MOTIFS + [_OTHER_MOT]},
+                _V3_JX: {mot: 0 for mot in _CANON_MOTIFS + [_OTHER_MOT]},
+                _MU_JX: {mot: 0 for mot in _CANON_MOTIFS + [_OTHER_MOT]}
+            },
+            _EVENTS: {
+                _V2_JX: {mot: 0 for mot in _CANON_MOTIFS + [_OTHER_MOT]},
+                _V3_JX: {mot: 0 for mot in _CANON_MOTIFS + [_OTHER_MOT]},
+                _MU_JX: {mot: 0 for mot in _CANON_MOTIFS + [_OTHER_MOT]}
+            }
         }
 
     with gzip.open(v2_jxs, 'rt') as file2, gzip.open(v3_jxs, 'rt') as file3:
@@ -551,11 +460,9 @@ def collect_jx_covs(v2_jxs, v3_jxs, v2_id_cov, v3_id_cov, mutual_samples,
                 )
                 v3_line = next(file3)
                 v3_coords = coordinates_from_jx_line(v3_line, coord_locs)
+                continue
             else:
                 # add jx to mutual
-                # TODO: improve addition of jxs to dictionary
-                # TODO: add "junction detection event" collection
-
                 v3_init_coords = v3_coords
                 v3_init_line = v3_line
                 v3_line_list = []
@@ -584,34 +491,20 @@ def collect_jx_covs(v2_jxs, v3_jxs, v2_id_cov, v3_id_cov, mutual_samples,
 
 def execute_jx_comp(v2_file, v3_file, recount2_id_map, out_path, now, flag):
     if flag == _SRA:
-        v2_id_cov = intropolis_firstpass(v2_file, recount2_id_map)
+        v2_ids = intropolis_firstpass(v2_file, recount2_id_map)
 
     else:
-        v2_id_cov = recount_firstpass(v2_file, recount2_id_map)
+        v2_ids = recount_firstpass(v2_file, recount2_id_map)
 
-    v3_id_cov = recount_firstpass(v3_file)
-    mutual_samples = set(v2_id_cov.keys()).intersection(set(v3_id_cov.keys()))
-    unwanted_keys_2 = set(v2_id_cov.keys) - mutual_samples
-    for key in unwanted_keys_2:
-        del v2_id_cov[key]
+    v3_ids = recount_firstpass(v3_file)
+    mutual_samples = v2_ids.intersection(v3_ids)
 
-    unwanted_keys_3 = set(v3_id_cov.keys()) - mutual_samples
-    for key in unwanted_keys_3:
-        del v3_id_cov[key]
-
-    v2_avg_cov = sum(v2_id_cov.values()) / len(v2_id_cov)
-    v3_avg_cov = sum(v3_id_cov.values()) / len(v3_id_cov)
     logging.info(
         '{}: v2 samples: {}, v3 samples: {}, mutual samples: {}'
-        ''.format(flag, len(v2_id_cov), len(v3_id_cov), len(mutual_samples))
-    )
-    logging.info(
-        '{} avg. total coverage: v2={}, v3={}'
-        ''.format(flag, v2_avg_cov, v3_avg_cov)
+        ''.format(flag, len(v2_ids), len(v3_ids), len(mutual_samples))
     )
     sample_jx_dict = collect_jx_covs(
-        v2_file, v3_file, v2_id_cov, v3_id_cov, mutual_samples,
-        recount2_id_map, flag
+        v2_file, v3_file, mutual_samples, recount2_id_map, flag
     )
     data_file = os.path.join(
         out_path, '{}_sample_jx_dict_{}.json'.format(flag, now)
@@ -619,7 +512,7 @@ def execute_jx_comp(v2_file, v3_file, recount2_id_map, out_path, now, flag):
     with open(data_file, 'w') as output:
         json.dump(sample_jx_dict, output)
 
-    filter_and_compare_jxs(sample_jx_dict, out_path, now, cohort=_SRA)
+    prepare_boxplot_data(sample_jx_dict, out_path, now, cohort=flag)
     return
 
 
