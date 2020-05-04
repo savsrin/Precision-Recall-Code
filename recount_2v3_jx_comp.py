@@ -272,12 +272,13 @@ def coordinates_from_jx_line(jx_line, coord_positions):
     :param jx_line:
     :return:
     """
+    if jx_line == None:
+        return None
     chrom = jx_line[coord_positions[0]]
-    chrom_int = int(chrom.strip('chr'))
     left = int(jx_line[coord_positions[1]])
     right = int(jx_line[coord_positions[2]])
     strand = jx_line[coord_positions[3]]
-    return (chrom_int, left, right, strand)
+    return (chrom, left, right, strand)
 
 
 def add_mutual_jx_to_samp_dict(samp_dict, line2, line3, mutual_samples,
@@ -292,10 +293,18 @@ def add_mutual_jx_to_samp_dict(samp_dict, line2, line3, mutual_samples,
     :return:
     """
     joint_samps = {}
-    motif = line2[4] + line2[5]
+    if type(line3[0]) == str:
+        motif = line3[7] + line3[8]
+        strand = line3[5]
+    else:
+        motif = line3[0][7] + line3[0][8]
+        strand = line3[0][5]
+    if strand == '-':
+        motif = motif.translate(_COMPLEMENT)[::-1]
+
     v2_samps = line2[6].split(',')
     v2_covs = line2[7].split(',')
-    if type(line3) == str:
+    if type(line3[0]) == str:
         samp_cov_3_list = line3[11].split(',')
     else:
         samp_cov_3_list = []
@@ -315,14 +324,27 @@ def add_mutual_jx_to_samp_dict(samp_dict, line2, line3, mutual_samples,
 
     # process v3 samples and coverage
     for samp_info in samp_cov_3_list:
+        if samp_info == '':
+            continue
         samp, cov = samp_info.split(':')
         if samp not in mutual_samples:
             continue
         if samp in joint_samps.keys():
             joint_samps[samp]['v3'] = int(cov)
         else:
-            samp_dict[samp][_JXS][_V3_JX][motif] += 1
-            samp_dict[samp][_EVENTS][_V3_JX][motif] += int(cov)
+            try:
+                samp_dict[samp][_JXS][_V3_JX][motif] += 1
+                samp_dict[samp][_EVENTS][_V3_JX][motif] += int(cov)
+            except TypeError:
+                logging.info('type error, unhashable type: list')
+                logging.info(samp)
+                logging.info(motif)
+                data_file = os.path.join(
+                    out_path, 'sample_intermediate_jx_dict_{}.json'.format(now)
+                )
+                with open(data_file, 'w') as output:
+                    json.dump(sample_jx_dict, output)
+                exit()
 
     # process coverage in mutual samples/jxs
     for samp, values in joint_samps.items():
@@ -377,6 +399,7 @@ def add_v3_jx_to_samp_dict(samp_dict, jx_line, strand, mutual_samps):
     if strand == '-':
         motif = motif.translate(_COMPLEMENT)[::-1]
     samp_cov_list = jx_line[11].split(',')
+    samp_cov_list.pop(0)
     for samp_info in samp_cov_list:
         samp, cov = samp_info.split(':')
         if samp not in mutual_samps:
@@ -434,7 +457,7 @@ def collect_jx_covs(v2_jxs, v3_jxs, mutual_samples, recount2_id_map,
                 samp_dict = add_v3_jx_to_samp_dict(
                     samp_dict, v3_line, st3, mutual_samples
                 )
-                v3_line = next(file3)
+                v3_line = next(file3, None)
                 v3_coords = coordinates_from_jx_line(v3_line, coord_locs)
                 continue
 
@@ -442,16 +465,16 @@ def collect_jx_covs(v2_jxs, v3_jxs, mutual_samples, recount2_id_map,
                 samp_dict = add_v2_jx_to_samp_dict(
                     samp_dict, v2_line, mutual_samples, recount2_id_map
                 )
-                v2_line = next(file2)
+                v2_line = next(file2, None)
                 v2_coords = coordinates_from_jx_line(v2_line, coord_locs)
-                continue
+                continue 
 
             # Main comparison: running through lines in both files
             if v2_coords < v3_coords:
                 samp_dict = add_v2_jx_to_samp_dict(
                     samp_dict, v2_line, mutual_samples, recount2_id_map
                 )
-                v2_line = next(file2)
+                v2_line = next(file2, None)
                 v2_coords = coordinates_from_jx_line(v2_line, coord_locs)
                 continue
             elif v2_coords > v3_coords:
@@ -459,7 +482,7 @@ def collect_jx_covs(v2_jxs, v3_jxs, mutual_samples, recount2_id_map,
                 samp_dict = add_v3_jx_to_samp_dict(
                     samp_dict, v3_line, st3, mutual_samples
                 )
-                v3_line = next(file3)
+                v3_line = next(file3, None)
                 v3_coords = coordinates_from_jx_line(v3_line, coord_locs)
                 continue
             else:
@@ -469,7 +492,7 @@ def collect_jx_covs(v2_jxs, v3_jxs, mutual_samples, recount2_id_map,
                 v3_line_list = []
                 while v3_coords == v3_init_coords:
                     v3_line_list.append(v3_line)
-                    v3_line = next(file3)
+                    v3_line = next(file3, None)
                     v3_coords = coordinates_from_jx_line(v3_line, coord_locs)
 
                 if len(v3_line_list) == 1:
@@ -483,7 +506,7 @@ def collect_jx_covs(v2_jxs, v3_jxs, mutual_samples, recount2_id_map,
                         recount2_id_map
                     )
 
-                v2_line = next(file2)
+                v2_line = next(file2, None)
                 v2_coords = coordinates_from_jx_line(v2_line, coord_locs)
                 continue
 
@@ -510,11 +533,10 @@ def execute_jx_comp(v2_file, v3_file, recount2_id_map, out_path, now, flag,
             out_path, '{}_mutual_samples_{}.json'.format(flag, now)
         )
         with open(sample_file, 'w') as output:
-            json.dump([mutual_samples], output)
+            json.dump(list(mutual_samples), output)
     else:
         with open(mutual_sample_file) as recover:
-            mutual_samples = json.load(recover)
-            mutual_samples = mutual_samples[0]
+            mutual_samples = set(json.load(recover))
 
     logging.info(
         '{}: {} mutual samples'.format(flag, len(mutual_samples))
