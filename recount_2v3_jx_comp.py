@@ -282,7 +282,7 @@ def coordinates_from_jx_line(jx_line, coord_positions):
 
 
 def add_mutual_jx_to_samp_dict(samp_dict, line2, line3, mutual_samples,
-                               recount2_id_map):
+                               recount2_id_map, flag):
     """
 
     :param samp_dict:
@@ -296,55 +296,56 @@ def add_mutual_jx_to_samp_dict(samp_dict, line2, line3, mutual_samples,
     if type(line3[0]) == str:
         motif = line3[7] + line3[8]
         strand = line3[5]
+        samp_cov_3_list = line3[11].split(',')
+        samp_cov_3_list.pop(0)
     else:
         motif = line3[0][7] + line3[0][8]
         strand = line3[0][5]
+        samp_cov_3_list = []
+        for line in line3:
+            temp_list = line[11].split(',')
+            temp_list.pop(0)
+            samp_cov_3_list.extend(temp_list)
+
     if strand == '-':
         motif = motif.translate(_COMPLEMENT)[::-1]
 
-    v2_samps = line2[6].split(',')
-    v2_covs = line2[7].split(',')
-    if type(line3[0]) == str:
-        samp_cov_3_list = line3[11].split(',')
+    if flag == _SRA:
+        v2_samps = line2[6].split(',')
+        v2_covs = line2[7].split(',')
+        for samp, cov in zip(v2_samps, v2_covs):
+            samp = recount2_id_map.get(samp, None)
+            if samp not in mutual_samples:
+                continue
+            if samp in samp_cov_3_list:
+                joint_samps[samp] = {'v2': int(cov)}
+            else:
+                samp_dict[samp][_JXS][_V2_JX][motif] += 1
+                samp_dict[samp][_EVENTS][_V2_JX][motif] += int(cov)
     else:
-        samp_cov_3_list = []
-        for line in line3:
-            samp_cov_3_list.extend(line[11].split(','))
-
-    # process v2 samples and coverage
-    for samp, cov in zip(v2_samps, v2_covs):
-        samp = recount2_id_map.get(samp, None)
-        if samp not in mutual_samples:
-            continue
-        if samp in samp_cov_3_list:
-            joint_samps[samp] = {'v2': int(cov)}
-        else:
-            samp_dict[samp][_JXS][_V2_JX][motif] += 1
-            samp_dict[samp][_EVENTS][_V2_JX][motif] += int(cov)
+        samp_cov_2_list = line2[11].split(',')
+        samp_cov_2_list.pop(0)
+        for samp_info in samp_cov_2_list:
+            samp, cov = samp_info.split(':')
+            samp = recount2_id_map.get(samp, None)
+            if samp not in mutual_samples:
+                continue
+            if samp in samp_cov_3_list:
+                joint_samps[samp] = {'v2': int(cov)}
+            else:
+                samp_dict[samp][_JXS][_V2_JX][motif] += 1
+                samp_dict[samp][_EVENTS][_V2_JX][motif] += int(cov)
 
     # process v3 samples and coverage
     for samp_info in samp_cov_3_list:
-        if samp_info == '':
-            continue
         samp, cov = samp_info.split(':')
         if samp not in mutual_samples:
             continue
         if samp in joint_samps.keys():
             joint_samps[samp]['v3'] = int(cov)
         else:
-            try:
-                samp_dict[samp][_JXS][_V3_JX][motif] += 1
-                samp_dict[samp][_EVENTS][_V3_JX][motif] += int(cov)
-            except TypeError:
-                logging.info('type error, unhashable type: list')
-                logging.info(samp)
-                logging.info(motif)
-                data_file = os.path.join(
-                    out_path, 'sample_intermediate_jx_dict_{}.json'.format(now)
-                )
-                with open(data_file, 'w') as output:
-                    json.dump(sample_jx_dict, output)
-                exit()
+            samp_dict[samp][_JXS][_V3_JX][motif] += 1
+            samp_dict[samp][_EVENTS][_V3_JX][motif] += int(cov)
 
     # process coverage in mutual samples/jxs
     for samp, values in joint_samps.items():
@@ -363,7 +364,8 @@ def add_mutual_jx_to_samp_dict(samp_dict, line2, line3, mutual_samples,
     return samp_dict
 
 
-def add_v2_jx_to_samp_dict(samp_dict, jx_line, mutual_samples, recount2_ids):
+def add_v2_jx_to_samp_dict(samp_dict, jx_line, mutual_samples, recount2_ids,
+                           flag):
     """
 
     :param samp_dict:
@@ -372,17 +374,15 @@ def add_v2_jx_to_samp_dict(samp_dict, jx_line, mutual_samples, recount2_ids):
     :param recount2_ids:
     :return:
     """
-    motif = jx_line[4] + jx_line[5]
-    samps = jx_line[6].split(',')
-    covs = jx_line[7].split(',')
-    for samp, cov in zip(samps, covs):
-        samp = recount2_ids.get(samp, None)
-        if samp not in mutual_samples:
-            continue
-        if motif not in _CANON_MOTIFS:
-            motif = _OTHER_MOT
-        samp_dict[samp][_JXS][_V2_JX][motif] += 1
-        samp_dict[samp][_EVENTS][_V2_JX][motif] += int(cov)
+    if flag == _SRA:
+        samp_dict = add_intropolis_jx_to_samp_dict(
+            samp_dict, jx_line, mutual_samples, recount2_ids
+        )
+    else:
+        motif = jx_line[7] + jx_line[8]
+        samp_dict = add_recount_jx_to_samp_dict(
+            samp_dict, jx_line, _V2_JX, motif, mutual_samples
+        )
     return samp_dict
 
 
@@ -398,6 +398,30 @@ def add_v3_jx_to_samp_dict(samp_dict, jx_line, strand, mutual_samps):
     motif = jx_line[7] + jx_line[8]
     if strand == '-':
         motif = motif.translate(_COMPLEMENT)[::-1]
+
+    samp_dict = add_recount_jx_to_samp_dict(
+        samp_dict, jx_line, _V3_JX, motif, mutual_samps
+    )
+    return samp_dict
+
+
+def add_intropolis_jx_to_samp_dict(samp_dict, jx_line, mutual_samples,
+                                   recount2_ids):
+    motif = jx_line[4] + jx_line[5]
+    samps = jx_line[6].split(',')
+    covs = jx_line[7].split(',')
+    for samp, cov in zip(samps, covs):
+        samp = recount2_ids.get(samp, None)
+        if samp not in mutual_samples:
+            continue
+        if motif not in _CANON_MOTIFS:
+            motif = _OTHER_MOT
+        samp_dict[samp][_JXS][_V2_JX][motif] += 1
+        samp_dict[samp][_EVENTS][_V2_JX][motif] += int(cov)
+    return samp_dict
+
+
+def add_recount_jx_to_samp_dict(samp_dict, jx_line, v2v3, motif, mutual_samps):
     samp_cov_list = jx_line[11].split(',')
     samp_cov_list.pop(0)
     for samp_info in samp_cov_list:
@@ -406,8 +430,8 @@ def add_v3_jx_to_samp_dict(samp_dict, jx_line, strand, mutual_samps):
             continue
         if motif not in _CANON_MOTIFS:
             motif = _OTHER_MOT
-        samp_dict[samp][_JXS][_V3_JX][motif] += 1
-        samp_dict[samp][_EVENTS][_V3_JX][motif] += int(cov)
+        samp_dict[samp][_JXS][v2v3][motif] += 1
+        samp_dict[samp][_EVENTS][v2v3][motif] += int(cov)
     return samp_dict
 
 
